@@ -1,72 +1,115 @@
-const cheerio = require("cheerio");
-const axios = require("axios");
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import cheerio from 'cheerio';
+import fetch from 'node-fetch';
+import 'dotenv/config.js';
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+const originalEmitWarning = process.emitWarning;
 
-var data = "";
+let suppressed = false;
 
-var config = {
-	method: "get",
-	url: "https://www.tiktok.com/@jannatmirza",
-	headers: {
-		"User-Agent":
-			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.82 Safari/537.36",
-	},
-	data: data,
-};
+/**
+ * Don't emit the NODE_TLS_REJECT_UNAUTHORIZED warning while
+ * we work on proper SSL verification.
+ * https://github.com/cypress-io/cypress/issues/5248
+ */
+function suppress() {
+	if (suppressed) {
+		return;
+	}
 
-async function getProfileData() {
-	try {
-		let response = await axios(config);
-		const $ = cheerio.load(response.data);
+	suppressed = true;
 
-		const displayPicture = $(".tiktok-1zpj2q-ImgAvatar.e1e9er4e1").attr(
-			"src"
-		);
-		const userTitle = $("[data-e2e=user-title]").text();
-		const userSubtitle = $("[data-e2e=user-subtitle]").text();
+	process.emitWarning = (warning, ...args) => {
+		if (
+			typeof warning === 'string' &&
+			warning.includes('NODE_TLS_REJECT_UNAUTHORIZED')
+		) {
+			// node will only emit the warning once
+			// https://github.com/nodejs/node/blob/82f89ec8c1554964f5029fab1cf0f4fad1fa55a8/lib/_tls_wrap.js#L1378-L1384
+			process.emitWarning = originalEmitWarning;
 
-		const following = $("[data-e2e=following-count]").text();
-		const followers = $("[data-e2e=followers-count]").text();
-		const likes = $("[data-e2e=likes-count]").text();
-
-		const userBio = $("[data-e2e=user-bio]").text();
-		const userSocial = $("[data-e2e=user-link]").attr("href");
-
-		const userVideos = $("[data-e2e=user-post-item-list]");
-
-		let videos = [];
-		let desc = [];
-		let videoList = {};
-
-		const videoDesc = $(".tiktok-1itcwxg-ImgPoster.e1yey0rl1");
-		for (let i = 0; i < videoDesc.length; i++) {
-			if (videoDesc[i].attribs.alt === "") {
-				desc.push("");
-			} else {
-				if (
-					videoDesc[i].attribs.alt !== videoDesc[i + 1]?.attribs?.alt
-				) {
-					desc.push(videoDesc[i].attribs.alt);
-				} else if (
-					videoDesc[i].attribs.alt === videoDesc[i + 1]?.attribs?.alt
-				) {
-					desc.push(videoDesc[i].attribs.alt);
-					i++;
-				}
-			}
+			return;
 		}
 
-		userVideos.find("div > div > div > div > div > a").each((_, item) => {
-			videos.push($(item).attr("href"));
-		});
+		return originalEmitWarning.call(process, warning, ...args);
+	};
+}
+
+function fetchWithTimeout(msecs, promise) {
+	const timeout = new Promise((resolve, reject) => {
+		setTimeout(() => {
+			reject(
+				new Error(
+					`Timed out in ${
+						msecs / 1000
+					} seconds. Check your Cookie or network connection.`
+				)
+			);
+		}, msecs);
+	});
+	return Promise.race([timeout, promise]);
+}
+
+async function getTiktokProfile({ username }) {
+	// read cookies from env
+	// Suppress nodejs tls issues due to proxy ssl issues
+	suppress();
+
+	process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+	if (!username) {
+		return {
+			statusCode: 400,
+			data: 'provide a valid username',
+		};
+	}
+
+	try {
+		const brightConfig = (process.env.BRIGHT_DATA_CREDENTIALS || '').split(':');
+		const brightCredentials = {
+			user: brightConfig[0],
+			password: brightConfig[1],
+		};
+		const proxy = `https://${brightCredentials.user}-country-de:${brightCredentials.password}@zproxy.lum-superproxy.io:22225`;
+		console.log(proxy);
+		const fetchResponse = await fetchWithTimeout(
+			5000,
+			fetch(`https://www.tiktok.com/@${username}`, {
+				headers: {
+					'User-Agent':
+						'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.82 Safari/537.36',
+				},
+				agent: new HttpsProxyAgent(proxy),
+			})
+		);
+		const fetchData = await fetchResponse.text();
+
+		const $ = cheerio.load(fetchData);
+
+		const displayPicture = $('.tiktok-1zpj2q-ImgAvatar.e1e9er4e1').attr('src');
+		const userTitle = $('[data-e2e=user-title]').text();
+		const userSubtitle = $('[data-e2e=user-subtitle]').text();
+
+		const following = $('[data-e2e=following-count]').text();
+		const followers = $('[data-e2e=followers-count]').text();
+		const likes = $('[data-e2e=likes-count]').text();
+
+		const userBio = $('[data-e2e=user-bio]').text();
+		const userSocial = $('[data-e2e=user-link]').attr('href');
+
+		const image = $('.tiktok-1itcwxg-ImgPoster.e1yey0rl1');
+		const videos = $('.tiktok-yz6ijl-DivWrapper.e1u9v4ua1');
+
+		const videoList = {};
 
 		for (let i = 0; i < videos.length; i++) {
 			videoList[i] = {
-				videoLink: videos[i],
-				videoDescription: desc[i],
+				videoLink: videos[i].children[0].attribs.href,
+				videoDescription: image[i].attribs.alt,
+				videoCaptionImage: image[i].attribs.src,
 			};
 		}
 
-		let result = {
+		const result = {
 			displayPictureUrl: displayPicture,
 			userTitle,
 			userSubtitle,
@@ -74,13 +117,26 @@ async function getProfileData() {
 			following,
 			likes,
 			userBio,
-			userSocial: userSocial !== undefined ? userSocial : "N/A",
+
+			// not every profile provides social media links
+			userSocial: userSocial !== undefined ? userSocial : 'N/A',
+
 			previewVideos: videoList,
 		};
+		
 		console.log(result);
+		
+		return {
+			statusCode: fetchResponse.status,
+			data: result,
+		};
 	} catch (err) {
-		console.error(err);
+		//throw createError(err.statusCode, err.message, err.stack);
+		return {
+			statusCode: err.response.status,
+			data: err.message,
+		};
 	}
 }
 
-getProfileData();
+getTiktokProfile({ username: 'khurrambutt281' });

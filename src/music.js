@@ -58,18 +58,13 @@ function createError(statusCode, message, stack) {
 	};
 }
 
-exports.handler = async (event, context) => {
-	console.log('POST FUNCTION');
-	// read cookies from env
-	// Suppress nodejs tls issues due to proxy ssl issues
+async function getTiktokMusic(musicId) {
 	suppress();
 
 	process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-	if (!event.postId) {
-		throw createError(400, 'Missing postId');
-	}
-	if (!event.cookie_tiktok) {
-		throw createError(400, 'Missing Cookie');
+
+	if (!musicId) {
+		throw createError(400, 'Music ID is required');
 	}
 	try {
 		const brightConfig = (process.env.BRIGHT_DATA_CREDENTIALS || '').split(':');
@@ -80,72 +75,55 @@ exports.handler = async (event, context) => {
 		const proxy = `https://${brightCredentials.user}-country-de:${brightCredentials.password}@zproxy.lum-superproxy.io:22225`;
 		console.log(proxy);
 		const fetchResponse = await fetchWithTimeout(
-			10000,
-			fetch(`https://www.tiktok.com/@tiktoker/video/${event.postId}`, {
+			5000,
+			fetch(`https://www.tiktok.com/music/original-sound-${musicId}`, {
 				headers: {
 					'User-Agent':
 						'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.82 Safari/537.36',
-					Cookie: event.cookie_tiktok,
-					Connection: 'keep-alive',
-					Accept: '*/*',
-					'Accept-Encoding': 'gzip, deflate, br',
 				},
 				agent: new HttpsProxyAgent(proxy),
 			})
 		);
-		const fetchData = await fetchResponse.text();
+		const response = await fetchResponse.text();
+		const $ = cheerio.load(response);
+		let videos = {};
 
-		const $ = cheerio.load(fetchData);
+		const musicTitle = $('[data-e2e=music-title]').text();
 
-		const authorImage = $('.avatar-anchor');
-		const imgSrc = authorImage.find('img').attr('src');
-		const profileIdTag = authorImage.attr('href');
+		const musicCreator = $('[data-e2e=music-creator]');
+		const creatorProfile =
+			musicCreator[0].children[0].attribs['href'].split('/')[1];
 
-		const authorDetails = $('.tiktok-12dba99-StyledAuthorAnchor.e10yw27c1');
-		const profileIdName = authorDetails.find('h3').text();
-		const profileNickName = authorDetails.find('h4').text();
+		const creatorName = musicCreator.text();
 
-		const postDes = $('.tiktok-1ejylhp-DivContainer.e11995xo0').text();
+		const musicVideoCount = $('[data-e2e=music-video-count]').text();
 
-		const music = $('.tiktok-9y3z7x-H4Link.e1wg6xq70').find('a');
-		const musicLink = music.attr('href');
-		const musicText = music.text();
+		const videoLinks = $('.tiktok-yz6ijl-DivWrapper.e1u9v4ua1');
+		const videoDescription = $('.tiktok-1itcwxg-ImgPoster.e1yey0rl1');
 
-		const video = $('.tiktok-yf3ohr-DivContainer.e1yey0rl0');
-		const videoCaptionImage = video.children('img').attr('src');
-
-		// NEED TO FIND A WAY TO SCRAPE VIDEO LINK
-		/* const videoLink = video.html() */
-
-		const likes = $('[data-e2e=like-count]').text();
-		const comments = $('[data-e2e=comment-count]').text();
-		const shares = $('[data-e2e=share-count]').text();
-
+		for (let i = 0; i < videoLinks.length; i++) {
+			const videoLink = videoLinks[i].children[0].attribs['href'];
+			const videoDesc = videoDescription[i].attribs['alt'];
+			const videoCaptionImage = videoDescription[i].attribs['src'];
+			videos[i] = {
+				videoLink,
+				videoDesc,
+				videoCaptionImage,
+			};
+		}
 		const result = {
-			authorImage: {
-				imageUrl: imgSrc,
-				authorId: 'https://www.tiktok.com' + profileIdTag,
-			},
-			authorDetails: {
-				authorName: profileIdName,
-				authorNickName: profileNickName,
-			},
-			postDetails: {
-				postDescripton: postDes,
-				musicLink: 'https://www.tiktok.com' + musicLink,
-				musicText,
-				videoLink: '',
-				videoCaptionImageLink: videoCaptionImage,
-				likes,
-				comments,
-				shares,
-			},
+			musicTitle,
+			creatorName,
+			creatorProfile,
+			creatorName,
+			musicVideoCount,
+			videos,
 		};
-		return {
-			statusCode: fetchResponse.status,
-			data: result,
-		};
+		console.log(result);
+		return result;
 	} catch (err) {
-		throw createError(err.response.status, err.message, err.stack);
+		throw new Error(err);
 	}
-};
+}
+
+getTiktokMusic('6988529397800258331');
