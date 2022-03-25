@@ -115,7 +115,6 @@ async function getTiktokMusic(musicId) {
 			musicTitle,
 			creatorName,
 			creatorProfile,
-			creatorName,
 			musicVideoCount,
 			videos,
 		};
